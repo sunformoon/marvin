@@ -90,7 +90,8 @@
 #include <curand.h>
 #include <cudnn.h>
 #include <sys/time.h>
-
+// add by ZZT; online;
+// #include <glog/logging.h>
 #define USE_OPENCV 0
 
 #if USE_OPENCV
@@ -1200,7 +1201,7 @@ std::vector<std::vector<int> > getIntVectorVector(std::string input){
     }
     return ret;
 }
-
+// definition of different function of numel, sizeofitem, numspel. ZZT
 size_t numel(const std::vector<int>& dim){
     size_t res = 1;
     for (int i=0;i<dim.size();++i) res *= (size_t)(dim[i]);
@@ -1709,7 +1710,7 @@ __global__ void Kernel_elementwise_comparison(size_t CUDA_NUM_LOOPS, size_t N, S
 }
 
 void GPU_elementwise_comparison(size_t N, StorageT* GPUdst, const StorageT* GPUsrcA, const StorageT* GPUsrcB){
-    Kernel_elementwise_comparison<<<CUDA_GET_BLOCKS(N), CUDA_NUM_THREADS>>>(CUDA_GET_LOOPS(N),N,GPUdst,GPUsrcA,GPUsrcB);
+    Kernel_elementwise_comparison<<<CUDA_GET_BLOCKS(N), CUDA_NUM_THREADS>>>(CUDA_GET_LOOPS(N), N, GPUdst, GPUsrcA, GPUsrcB);
     //checkCUDA(__LINE__,cudaGetLastError());
 }
 
@@ -1719,14 +1720,14 @@ __global__ void Kernel_copyGPUforward(size_t CUDA_NUM_LOOPS, size_t N, const Sto
     for (size_t idx = idxBase; idx < min(N,idxBase+CUDA_NUM_LOOPS); ++idx ){
         int out_base = idx*sizeofitem_out+offset;
         int in_base = idx*sizeofitem_in;
-        for(int i=0;i<sizeofitem_in; ++i){
+        for(int i = 0; i < sizeofitem_in; ++i){
             out[out_base + i] = in[in_base + i];
         }
     }
 }
-
+// size_t N = numofitems; N (N * C * H * W); CUDA_GET_LOOPS(N) and N are the same N;
 void copyGPUforward(size_t N, const StorageT* in, StorageT* out, int sizeofitem_in, int sizeofitem_out, int offset){
-    Kernel_copyGPUforward<<<CUDA_GET_BLOCKS(N), CUDA_NUM_THREADS>>>(CUDA_GET_LOOPS(N),N,in,out,sizeofitem_in,sizeofitem_out,offset);
+    Kernel_copyGPUforward<<<CUDA_GET_BLOCKS(N), CUDA_NUM_THREADS>>>(CUDA_GET_LOOPS(N), N, in, out, sizeofitem_in, sizeofitem_out, offset);
 }
 
 
@@ -1735,15 +1736,49 @@ __global__ void Kernel_copyGPUbackward(size_t CUDA_NUM_LOOPS, size_t N, StorageT
     if (idxBase >= N) return;
     for (size_t idx = idxBase; idx < min(N,idxBase+CUDA_NUM_LOOPS); ++idx ){
         int in_base = idx*sizeofitem_in;
-        int out_base = idx*sizeofitem_out+offset;
-        for(int i=0;i<sizeofitem_in; ++i){
+        int out_base = idx*sizeofitem_out + offset;
+        for(int i = 0; i < sizeofitem_in; ++i){
             in[in_base + i] = GPUCompute2StorageT( GPUStorage2ComputeT(in[in_base + i]) + GPUStorage2ComputeT(out[out_base + i]) );
         }
     }
 }
 
 void copyGPUbackward(size_t N, StorageT* in, const StorageT* out, int sizeofitem_in, int sizeofitem_out, int offset){
-    Kernel_copyGPUbackward<<<CUDA_GET_BLOCKS(N), CUDA_NUM_THREADS>>>(CUDA_GET_LOOPS(N),N,in,out,sizeofitem_in,sizeofitem_out,offset);
+    Kernel_copyGPUbackward<<<CUDA_GET_BLOCKS(N), CUDA_NUM_THREADS>>>(CUDA_GET_LOOPS(N), N, in, out, sizeofitem_in, sizeofitem_out, offset);
+}
+
+__global__ void Kernel_copySliceGPUforward(size_t CUDA_NUM_LOOPS, size_t N, const StorageT* in, StorageT* out, int sizeofitem_in, int sizeofitem_out, int offset){
+    const size_t idxBase = size_t(CUDA_NUM_LOOPS) * (size_t(CUDA_NUM_THREADS) * size_t(blockIdx.x) + size_t(threadIdx.x));
+    if (idxBase >= N) return;
+    for (size_t idx = idxBase; idx < min(N,idxBase+CUDA_NUM_LOOPS); ++idx ){
+        int out_base = idx*sizeofitem_out;
+        int in_base = idx*sizeofitem_in + offset;
+        // the inner iteration shall be the sizeofitem_out instead of the sizeofitem_in;!!! ZZT
+        for(int i = 0; i < sizeofitem_out; ++i){
+            out[out_base + i] = in[in_base + i];
+        }
+    }
+}
+// size_t N = numofitems; N (N * C * H * W); CUDA_GET_LOOPS(N) and N are the same N;
+void copySliceGPUforward(size_t N, const StorageT* in, StorageT* out, int sizeofitem_in, int sizeofitem_out, int offset){
+    Kernel_copySliceGPUforward<<<CUDA_GET_BLOCKS(N), CUDA_NUM_THREADS>>>(CUDA_GET_LOOPS(N), N, in, out, sizeofitem_in, sizeofitem_out, offset);
+}
+
+__global__ void Kernel_copySliceGPUbackward(size_t CUDA_NUM_LOOPS, size_t N, StorageT* in, const StorageT* out, int sizeofitem_in, int sizeofitem_out, int offset){
+    const size_t idxBase = size_t(CUDA_NUM_LOOPS) * (size_t(CUDA_NUM_THREADS) * size_t(blockIdx.x) + size_t(threadIdx.x));
+    if (idxBase >= N) return; // idxBase = 0??
+    for (size_t idx = idxBase; idx < min(N,idxBase + CUDA_NUM_LOOPS); ++idx ){
+        int in_base = idx*sizeofitem_in + offset;
+        int out_base = idx*sizeofitem_out;
+        // the inner iteration shall be the sizeofitem_out instead of the sizeofitem_in;!!! ZZT
+        for(int i = 0; i < sizeofitem_out; ++i){
+            in[in_base + i] = GPUCompute2StorageT( GPUStorage2ComputeT(in[in_base + i]) + GPUStorage2ComputeT(out[out_base + i]) );
+        }
+    }
+}
+
+void copySliceGPUbackward(size_t N, StorageT* in, const StorageT* out, int sizeofitem_in, int sizeofitem_out, int offset){
+    Kernel_copySliceGPUbackward<<<CUDA_GET_BLOCKS(N), CUDA_NUM_THREADS>>>(CUDA_GET_LOOPS(N),N,in,out,sizeofitem_in,sizeofitem_out,offset);
 }
 
 __global__ void Kernel_elementwise_acc(size_t CUDA_NUM_LOOPS, size_t N, StorageT* GPUdst, const StorageT* GPUsrc){
@@ -4502,7 +4537,26 @@ public:
         if (in.size()!=out.size()) { std::cout<<std::endl<<"ConvolutionLayer #in should be the same as #out"<<std::endl; FatalError(__LINE__); }
 
         weight_dim[1] = in[0]->dim[1]/group;
-
+        // debug; dim shall be the shape like in the caffe; ZZT
+        // std::cout<< "###############Debugging#############";
+        // std::cout<< "dim" << in[0]->dim;
+        // std::cout<< " in[0] -> dim[1]" << in[0]->dim[1];
+        // std::cout<< "sizeofitem dim" << sizeofitem(in[0]->dim);
+        // std::cout<< "numberofiterms" << in[0]->dim[0];
+        // LOG(INFO) << "###############Debugging#############";
+        // LOG(INFO) << "dim";
+        // LOG(INFO) << in[0]->dim;
+        // LOG(INFO) << " in[0] -> dim[1]";
+        // LOG(INFO) << in[0]->dim[1];
+        // LOG(INFO) << "sizeofitem dim";
+        // LOG(INFO) << sizeofitem(in[0]->dim);
+        // LOG(INFO) << "numberofiterms";
+        // LOG(INFO) << in[0]->dim[0];
+        std::cout<< "###############Debugging#############\n";
+        std::cout<<"in[0]->dim[0] or numofitems "<<in[0]->dim[0]<<std::endl;
+        std::cout<<"in[0]->dim[1] "<<in[0]->dim[1]<<std::endl;
+        std::cout<<"sizeofitem in[0]->dim "<<sizeofitem(in[0]->dim)<<std::endl;
+        std::cout<< "###############Debugging endl#############\n";
         // create descriptor
         checkCUDNN(__LINE__,cudnnCreateFilterDescriptor(&filter_desc) );
         checkCUDNN(__LINE__,cudnnCreateTensorDescriptor(&bias_desc) );
@@ -6102,7 +6156,7 @@ public:
         std::cout<<name<<std::endl;
 
         in_group = in.size()/out.size();
-        if (in_group<2 || in.size()!= in_group * out.size()){ std::cout<<"ElementWiseLayer in out size wrong "<<std::endl; FatalError(__LINE__); }
+        if (in_group<2 || in.size()!= in_group * out.size()){ std::cout<<"ConcatLayer in out size wrong "<<std::endl; FatalError(__LINE__); }
 
         for(int j=0;j<out.size();j++){
             out[j]->need_diff = false;
@@ -6135,9 +6189,9 @@ public:
     void forward(Phase phase_){
         for(int j=0;j<out.size();j++){
             int offset = 0;
-            int numofitems = out[j]->dim[0];
-            for(int i=j*in_group; i<(j+1)*in_group;i++){
-                copyGPUforward (numofitems, in[i]->dataGPU, out[j]->dataGPU, sizeofitem(in[i]->dim), sizeofitem(out[j]->dim), offset);
+            int numofitems = out[j]->dim[0]; // N; out[j]->dim[0] shall equal to the in[i]->dim[0], where the only difference is the dim[1];
+            for(int i=j*in_group; i<(j+1)*in_group;i++){ // iterate along the in group to merge multiple inputs to one output;
+                copyGPUforward(numofitems, in[i]->dataGPU, out[j]->dataGPU, sizeofitem(in[i]->dim), sizeofitem(out[j]->dim), offset);
                 offset += sizeofitem(in[i]->dim);
             }
         }
@@ -6145,8 +6199,8 @@ public:
     void backward(Phase phase_){
         for(int j=0;j<out.size();j++){
             int offset = 0;
-            int numofitems = out[j]->dim[0];
-            for(int i=j*in_group; i<(j+1)*in_group;i++){
+            int numofitems = out[j]->dim[0]; // N;
+            for(int i=j*in_group; i<(j+1)*in_group;i++){ // iterate along the in group to merge multiple inputs to one output;
                 if (in[i]->need_diff){
                     copyGPUbackward(numofitems, in[i]->diffGPU, out[j]->diffGPU, sizeofitem(in[i]->dim), sizeofitem(out[j]->dim), offset);
                 }
@@ -7404,6 +7458,63 @@ public:
 
 //////////////////////////////////////////////////////////////////////////////////////////////////
 // Add your new layers here
+class SliceLayer: public Layer {
+public:
+    SliceLayer(std::string name_, Phase phase_): Layer(name_){
+        phase = phase_;
+    };
+    SliceLayer(JSON* json){
+        SetOrDie(json, name)
+        SetValue(json, phase,       TrainingTesting)
+    };
+    size_t Malloc(Phase phase_){
+        size_t memoryBytes = 0;
+        std::cout << (train_me? "* " : "  ");
+        std::cout << name << std::endl;
+
+        if (in.size() != 1){ std::cout<<"SliceLayer in size wrong "<<std::endl; FatalError(__LINE__); }
+        if (out.size() != in[0]->dim[1]){std::cout << "SliceLayer in out size wrong " << std::endl; FatalError(__LINE__); }
+        
+        // the in[0]->dim : N * C * H * W...;
+        // out[0], out[1], ..., out[C - 1]: N * 1 * H * W...;
+        std::vector<int> dim = in[0]->dim;
+        dim[1] = 1;
+
+        for(int j = 0; j < out.size(); j++){
+            if (in[0]->need_diff){
+                out[j]->need_diff = true;
+            }
+
+            out[j]->receptive_field = in[0]->receptive_field;
+            out[j]->receptive_gap = in[0]->receptive_gap;
+            out[j]->receptive_offset = in[0]->receptive_offset;
+
+            memoryBytes += out[j]->Malloc(dim);
+        }
+        return memoryBytes;
+    };
+    void forward(Phase phase_){
+        // in.size() == 1; and out.size() == in[0]->dim(1)
+        // out[0]->dim : N * 1 * H * W
+        int offset = 0; // the offset of the in; // out.size = C_in;
+        for(int j = 0; j < out.size(); ++j){
+            int numofitems = out[j]->dim[0]; // N // out[j]->dim[0] shall equal to the in[0]->dim[0], where the only difference is the dim[1];
+            copySliceGPUforward(numofitems, in[0]->dataGPU, out[j]->dataGPU, sizeofitem(in[0]->dim), sizeofitem(out[j]->dim), offset);
+            offset += sizeofitem(out[j]->dim); // 1HW...
+        }
+    };
+    void backward(Phase phase_){
+        // check whether the input slice need gradient update;
+        if (in[0]->need_diff){
+            int offset = 0;
+            for(int j = 0; j < out.size(); ++j){
+                int numofitems = out[j]->dim[0]; // 1HW...
+                copySliceGPUbackward(numofitems, in[0]->diffGPU, out[j]->diffGPU, sizeofitem(in[0]->dim), sizeofitem(out[j]->dim), offset);
+                offset += sizeofitem(out[j]->dim); // 1HW...
+            }
+        }
+    };
+};
 //////////////////////////////////////////////////////////////////////////////////////////////////
 
 //////////////////////////////////////////////////////////////////////////////////////////////////
@@ -7464,6 +7575,7 @@ public:
 #endif            
             else if (0==type.compare("ElementWise"))            pLayer = new ElementWiseLayer(p);
             else if (0==type.compare("Concat"))                 pLayer = new ConcatLayer(p);
+            else if (0==type.compare("Slice"))                  pLayer = new SliceLayer(p); // added by ZZT
             else if (0==type.compare("Convolution"))            pLayer = new ConvolutionLayer(p);
             else if (0==type.compare("Deconvolution"))          pLayer = new DeconvolutionLayer(p);
             else if (0==type.compare("Reshape"))                pLayer = new ReshapeLayer(p);
