@@ -1336,6 +1336,7 @@ __global__ void Accuracy_MultinomialLogistic(
         loss[idx] = GPUCompute2StorageT(1);
         for (int d = 0; d < C; ++d) {
             if (GPUStorage2ComputeT(pred[baseID + d * M]) > prob) {
+                // the name loss is misleading;
                 loss[idx] = GPUCompute2StorageT(0);
             }
         }
@@ -1384,7 +1385,8 @@ __global__ void Loss_MultinomialLogistic(
         int offset = l * M + (idx % M);
         int elementID = (idx / M) * C * M + offset;
         ComputeT prob = max(GPUStorage2ComputeT(pred[elementID]), ComputeT_MIN);
-        ComputeT res = log(prob);
+        ComputeT res = log(prob); // the called function cublassum calculates the absolute sum
+        // therefore it's Okay to skip the minus sign;
         // if (weight != NULL) res *= GPUStorage2ComputeT(weight[l]);
         if (weight != NULL) res *= reweight[l];
         if (weightTensor != NULL)
@@ -6481,6 +6483,7 @@ public:
                 checkCUBLAS(__LINE__, GPUasum(cublasHandle, loss_numel,
                                               loss_values, 1, &resultSum));
                 result += resultSum / loss_numel;
+                // this calculate the accuracy, therefore the name is misleading;
                 Loss_MultinomialLogistic<<<CUDA_GET_BLOCKS(loss_numel),
                     CUDA_NUM_THREADS>>>(
                         CUDA_GET_LOOPS(loss_numel),
@@ -6488,7 +6491,7 @@ public:
                         (in.size()==3 ? numel(in[2]->dim) : 0),
                         in[0]->dataGPU, in[1]->dataGPU, loss_weightsGPU,
                         (in.size()==3 ? in[2]->dataGPU : NULL),
-                        loss_values);
+                        loss_values); // the loss_values is re-assigned the value for the loss;
                 break;
             case SmoothL1:
                 Loss_SmoothL1<<<CUDA_GET_BLOCKS(loss_numel),
