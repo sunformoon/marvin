@@ -1298,9 +1298,38 @@ __global__ void Accuracy_MultinomialLogistic(
     const size_t idxBase = size_t(CUDA_NUM_LOOPS) *
                            (size_t(CUDA_NUM_THREADS) * size_t(blockIdx.x) +
                             size_t(threadIdx.x));
+    /* C: channel; M: H * W * D ...; 
+    you can not change the weight inside this function;
+    change the weight outside this function;
+    label: N * 1 * H * W * D ...;
+    weight: [N0,N1, N2, N3, ..., N_(C - 1)];
+    */
     if (idxBase >= N) return;
+    if (weight != NULL) {
+        std::vector<ComputeT> reweight; // recalculate the weight function;
+        ComputeT totalweight = GPUStorage2ComputeT(0); // initialization;
+        ComputeT posins = GPUStorage2ComputeT(0); // record the number of positive instances;
+        // recalculate the number of 0s;
+        for (int i = 1; i < C; ++i) {
+            reweight[i] = GPUStorage2ComputeT(weight[i]);
+            posins += GPUStorage2ComputeT(weight[i]);
+        }
+        reweight[0] = M - posins;
+        for (int i = 0; i < C; ++i) {
+            reweight[i] = 1.0 / max(reweight[i], ComputeT_MIN);
+            totalweight += reweight[i];
+        }
+        for (int i = 0; i < C; ++i) {
+            reweight[i] /= max(totalweight, ComputeT_MIN);
+        }
+    }
     for (size_t idx = idxBase; idx < min(N, idxBase + CUDA_NUM_LOOPS); ++idx) {
         int l = int(GPUStorage2ComputeT(label[idx]));
+        // refine the label to be dependant on the channel number C;
+        l *= (l < C); // refine the labels to be the ground truth that is less than the channel number;
+        // Shall we have a global weight for each class??
+        // std::vector<ComputeT> reweight; // recalculate the weight function;
+
         int baseID = (idx / M) * C * M + idx % M;
         int elementID = baseID + l * M;
         ComputeT prob = GPUStorage2ComputeT(pred[elementID]);
@@ -1311,8 +1340,9 @@ __global__ void Accuracy_MultinomialLogistic(
             }
         }
         if (weight != NULL) {
-            loss[idx] = GPUCompute2StorageT(GPUStorage2ComputeT(loss[idx]) *
-                                            GPUStorage2ComputeT(weight[l]));
+            // loss[idx] = GPUCompute2StorageT(GPUStorage2ComputeT(loss[idx]) *
+                                            // GPUStorage2ComputeT(weight[l]));
+            loss[idx] = GPUCompute2StorageT(GPUStorage2ComputeT(loss[idx]) * reweight[l]);
         }
         if (weightTensor != NULL) {
             loss[idx] = GPUCompute2StorageT(GPUStorage2ComputeT(loss[idx]) *
@@ -1330,13 +1360,33 @@ __global__ void Loss_MultinomialLogistic(
                            (size_t(CUDA_NUM_THREADS) * size_t(blockIdx.x) +
                             size_t(threadIdx.x));
     if (idxBase >= N) return;
+    if (weight != NULL) {
+        std::vector<ComputeT> reweight; // recalculate the weight function;
+        ComputeT totalweight = GPUStorage2ComputeT(0); // initialization;
+        ComputeT posins = GPUStorage2ComputeT(0); // record the number of positive instances;
+        // recalculate the number of 0s;
+        for (int i = 1; i < C; ++i) {
+            reweight[i] = GPUStorage2ComputeT(weight[i]);
+            posins += GPUStorage2ComputeT(weight[i]);
+        }
+        reweight[0] = M - posins;
+        for (int i = 0; i < C; ++i) {
+            reweight[i] = 1.0 / max(reweight[i], ComputeT_MIN);
+            totalweight += reweight[i];
+        }
+        for (int i = 0; i < C; ++i) {
+            reweight[i] /= max(totalweight, ComputeT_MIN);
+        }
+    }
     for (size_t idx = idxBase; idx < min(N, idxBase + CUDA_NUM_LOOPS); ++idx) {
         int l = int(GPUStorage2ComputeT(label[idx]));
+        l *= (l < C); // refine the label according to the number of channels;
         int offset = l * M + (idx % M);
         int elementID = (idx / M) * C * M + offset;
         ComputeT prob = max(GPUStorage2ComputeT(pred[elementID]), ComputeT_MIN);
         ComputeT res = log(prob);
-        if (weight != NULL) res *= GPUStorage2ComputeT(weight[l]);
+        // if (weight != NULL) res *= GPUStorage2ComputeT(weight[l]);
+        if (weight != NULL) res *= reweight[l];
         if (weightTensor != NULL)
             res *= GPUStorage2ComputeT(weightTensor[elementID % wN]);
         loss[idx] = GPUCompute2StorageT(res);
@@ -1351,12 +1401,32 @@ __global__ void LossGrad_MultinomialLogistic(
                            (size_t(CUDA_NUM_THREADS) * size_t(blockIdx.x) +
                             size_t(threadIdx.x));
     if (idxBase >= N) return;
+    if (weight != NULL) {
+        std::vector<ComputeT> reweight; // recalculate the weight function;
+        ComputeT totalweight = GPUStorage2ComputeT(0); // initialization;
+        ComputeT posins = GPUStorage2ComputeT(0); // record the number of positive instances;
+        // recalculate the number of 0s;
+        for (int i = 1; i < C; ++i) {
+            reweight[i] = GPUStorage2ComputeT(weight[i]);
+            posins += GPUStorage2ComputeT(weight[i]);
+        }
+        reweight[0] = M - posins;
+        for (int i = 0; i < C; ++i) {
+            reweight[i] = 1.0 / max(reweight[i], ComputeT_MIN);
+            totalweight += reweight[i];
+        }
+        for (int i = 0; i < C; ++i) {
+            reweight[i] /= max(totalweight, ComputeT_MIN);
+        }
+    }
     for (size_t idx = idxBase; idx < min(N, idxBase + CUDA_NUM_LOOPS); ++idx) {
         int l = int(GPUStorage2ComputeT(label[idx]));
+        l *= (l < C); // refine the label according to the number of channels;
         int offset = l * M + (idx % M);
         int elementID = (idx / M) * C * M + offset;
         ComputeT prob = max(GPUStorage2ComputeT(pred[elementID]), ComputeT_MIN);
-        if (weight != NULL) scale *= GPUStorage2ComputeT(weight[l]);
+        // if (weight != NULL) scale *= GPUStorage2ComputeT(weight[l]);
+        if (weight != NULL) scale *= reweight[l];
         if (weightTensor != NULL)
             scale *= GPUStorage2ComputeT(weightTensor[elementID % wN]);
         diff[elementID] = GPUCompute2StorageT(
@@ -1373,14 +1443,34 @@ __global__ void LossGrad_MultinomialLogistic_StableSoftmax(
                            (size_t(CUDA_NUM_THREADS) * size_t(blockIdx.x) +
                             size_t(threadIdx.x));
     if (idxBase >= N) return;
+    if (weight != NULL) {
+        std::vector<ComputeT> reweight; // recalculate the weight function; // the size is dymnamic;
+        ComputeT totalweight = GPUStorage2ComputeT(0); // initialization;
+        ComputeT posins = GPUStorage2ComputeT(0); // record the number of positive instances;
+        // recalculate the number of 0s;
+        for (int i = 1; i < C; ++i) {
+            reweight[i] = GPUStorage2ComputeT(weight[i]);
+            posins += GPUStorage2ComputeT(weight[i]);
+        }
+        reweight[0] = M - posins;
+        for (int i = 0; i < C; ++i) {
+            reweight[i] = 1.0 / max(reweight[i], ComputeT_MIN);
+            totalweight += reweight[i];
+        }
+        for (int i = 0; i < C; ++i) {
+            reweight[i] /= max(totalweight, ComputeT_MIN);
+        }
+    }
     for (size_t idx = idxBase; idx < min(N, idxBase + CUDA_NUM_LOOPS); ++idx) {
         int l = int(GPUStorage2ComputeT(label[idx]));
+        l *= (l < C); // refine the label according to the number of channels;
         int modM = idx % M;
         int baseID = (idx / M) * C * M + modM;
         int elementID = baseID + l * M;
 
         if (weight != NULL) {
-            scale *= GPUStorage2ComputeT(weight[l]);
+            // scale *= GPUStorage2ComputeT(weight[l]);
+            scale *= reweight[l];
         }
 
         if (weightTensor == NULL) {
@@ -1749,7 +1839,7 @@ void copyGPUbackward(size_t N, StorageT* in, const StorageT* out, int sizeofitem
 
 __global__ void Kernel_copySliceGPUforward(size_t CUDA_NUM_LOOPS, size_t N, const StorageT* in, StorageT* out, int sizeofitem_in, int sizeofitem_out, int offset){
     const size_t idxBase = size_t(CUDA_NUM_LOOPS) * (size_t(CUDA_NUM_THREADS) * size_t(blockIdx.x) + size_t(threadIdx.x));
-    if (idxBase >= N) return;
+    if (idxBase >= N) return;// idxBase is the BIG N base; (N * C * H * W * D ...)
     for (size_t idx = idxBase; idx < min(N,idxBase+CUDA_NUM_LOOPS); ++idx ){
         int out_base = idx*sizeofitem_out;
         int in_base = idx*sizeofitem_in + offset;
@@ -1766,7 +1856,7 @@ void copySliceGPUforward(size_t N, const StorageT* in, StorageT* out, int sizeof
 
 __global__ void Kernel_copySliceGPUbackward(size_t CUDA_NUM_LOOPS, size_t N, StorageT* in, const StorageT* out, int sizeofitem_in, int sizeofitem_out, int offset){
     const size_t idxBase = size_t(CUDA_NUM_LOOPS) * (size_t(CUDA_NUM_THREADS) * size_t(blockIdx.x) + size_t(threadIdx.x));
-    if (idxBase >= N) return; // idxBase = 0??
+    if (idxBase >= N) return; // idxBase = 0?? // idxBase is the BIG N base; (N * C * H * W * D ...)
     for (size_t idx = idxBase; idx < min(N,idxBase + CUDA_NUM_LOOPS); ++idx ){
         int in_base = idx*sizeofitem_in + offset;
         int out_base = idx*sizeofitem_out;
@@ -3322,7 +3412,7 @@ public:
 
         delete[] CPUbuf;
     }
-
+    // initialization code here;
     void randInit() {
         if (weight_dataGPU != NULL) fillGPU(weight_dataGPU, weight_dim, weight_filler, weight_filler_param);
         if (bias_dataGPU != NULL) fillGPU(bias_dataGPU, bias_dim, bias_filler, bias_filler_param);
@@ -4969,10 +5059,11 @@ public:
             std::vector<int> dimOut;
             dimOut.resize(in[i]->dim.size());
 
-            dimOut[0] = in[i]->dim[0];
-            dimOut[1] = num_output;
+            dimOut[0] = in[i]->dim[0]; // N
+            dimOut[1] = num_output; // C
             for (int d=0;d<window.size();++d){
-                dimOut[2+d] = (in[i]->dim[2+d]-1)*stride[d] + window[d] - 2*padding[d];
+                // this is what I want; // the output dimension of the deconvolution layer;
+                dimOut[2+d] = (in[i]->dim[2+d]-1)*stride[d] + window[d] - 2*padding[d]; // this is the H * W * D ... dimensions
             }
 
             size_t dall = in[i]->receptive_field.size();
@@ -6288,7 +6379,7 @@ public:
                 std::endl;
                 FatalError(__LINE__);
             }
-            loss_numel = numExamples * numspel(in[0]->dim);
+            loss_numel = numExamples * numspel(in[0]->dim); // N * H * W * ...
             break;
             case SmoothL1:
                 if (!(in.size() == 2 || in.size() == 3)) {
@@ -6342,7 +6433,7 @@ public:
             case Infogain:
                 break;
         }
-        scale = loss_weight / loss_numel;
+        scale = loss_weight / loss_numel; // loss scale for each instance; e.g., loss_weight = 1.0;
 
         memoryBytes += loss_numel * sizeofStorageT;
         checkCUDA(__LINE__, cudaMalloc(&loss_values, memoryBytes));
@@ -7476,7 +7567,7 @@ public:
         if (out.size() != in[0]->dim[1]){std::cout << "SliceLayer in out size wrong " << std::endl; FatalError(__LINE__); }
         
         // the in[0]->dim : N * C * H * W...;
-        // out[0], out[1], ..., out[C - 1]: N * 1 * H * W...;
+        // out[0], out[1], ..., out[C - 1]: N * 1 * H * W...; there is C output blobs4;
         std::vector<int> dim = in[0]->dim;
         dim[1] = 1;
 
